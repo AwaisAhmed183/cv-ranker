@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "CV Ranker"
+description = "A focused resume screening tool that lets hiring teams upload or paste a CV, compare it with a job description, and receive an explainable match score with strengths and skill gaps."
+version = "1.0.0"
+id = "artifacts/cv-ranker"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24821
+
+[services.development]
+run = "pnpm --filter @workspace/cv-ranker run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/cv-ranker", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/cv-ranker/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24821"
+BASE_PATH = "/"
