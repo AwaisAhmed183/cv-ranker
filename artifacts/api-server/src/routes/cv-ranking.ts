@@ -55,5 +55,21 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
     const responseText = result.response.text();
 
     // Parse the raw JSON string from Gemini and send it directly to the frontend
-    const parsedData = JSON.parse(responseText);
+    let parsedData: unknown;
+    try {
+      parsedData = JSON.parse(responseText);
+    } catch (error) {
+      console.error("Gemini returned malformed JSON", error);
+      return res
+        .status(502)
+        .json({ error: "Gemini returned an invalid analysis response" });
+    }
+
     return res.status(200).json(parsedData);
+  } catch (error) {
+    console.error("CV ranking request failed", error);
+    return res.status(500).json({ error: "Failed to analyze CV" });
+  }
+});
+
+export default router;
