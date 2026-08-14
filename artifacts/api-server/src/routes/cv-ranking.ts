@@ -22,15 +22,64 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
         .json({ error: "Gemini API key is not configured" });
     }
 
-    // Initialize Gemini
+    // Initialize Gemini with strict JSON output
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            score: { type: "INTEGER" },
+            verdict: { type: "STRING" },
+            summary: { type: "STRING" },
+            matched: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  label: { type: "STRING" },
+                  detail: { type: "STRING" },
+                  evidence: { type: "STRING" },
+                },
+                required: ["label", "detail", "evidence"],
+              },
+            },
+            gaps: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  label: { type: "STRING" },
+                  detail: { type: "STRING" },
+                },
+                required: ["label", "detail"],
+              },
+            },
+            evidence: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  quote: { type: "STRING" },
+                  context: { type: "STRING" },
+                },
+                required: ["quote", "context"],
+              },
+            },
+          },
+          required: ["score", "verdict", "summary", "matched", "gaps", "evidence"],
+        },
+      },
+    });
 
-    // Create the prompt for Gemini
-    
-    // Create the prompt for Gemini to return strict JSON
     const prompt = `
-      You are an expert HR recruiter. Compare the following Job Description and CV.
+      You are an expert hiring analyst. Evaluate the candidate against the job description using a weighted rubric:
+      - 40% role fit: alignment with required skills, tools, responsibilities, and domain context.
+      - 40% experience and impact: seniority, direct experience, scope, outcomes, and quality of evidence.
+      - 20% clarity and credibility: how clearly the CV supports claims and how compelling the presentation is.
 
       --- JOB DESCRIPTION ---
       ${jobDescription}
@@ -38,16 +87,10 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
       --- CV / RESUME ---
       ${cvText}
 
-      Return a valid JSON object (and ONLY the JSON object, no markdown formatting, no code fences) with this exact structure:
-      {
-        "score": (integer 0-100),
-        "verdict": (string summarizing the match, e.g. "Strong first read"),
-        "summary": (string explaining the match),
-        "matched": [{"label": (string), "detail": (string), "evidence": (string)}],
-        "gaps": [{"label": (string), "detail": (string)}],
-        "evidence": [{"quote": (string), "context": (string)}]
-      }
-      Extract the evidence quotes directly from the CV text.
+      Return ONLY a valid JSON object that matches the required schema. Do not add markdown, comments, or code fences.
+      Score the candidate from 0 to 100.
+      Give a brief verdict title, a concise summary, a matched array with label/detail/evidence, a gaps array with label/detail, and an evidence array with direct quotes from the CV and the surrounding context.
+      Extract the evidence quotes directly from the CV text and keep every string concise and factual.
     `;
 
     // Call Gemini
