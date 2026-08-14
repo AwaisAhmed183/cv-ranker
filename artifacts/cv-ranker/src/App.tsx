@@ -135,7 +135,7 @@ function Home() {
   const [showMethod, setShowMethod] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const canAnalyze =
-    !isExtracting && job.trim().length > 30 && cv.trim().length > 30;
+    !isExtracting && job.trim().length > 10 && cv.trim().length > 10;
   const jobCount = useMemo(
     () => (job.trim() ? job.trim().split(/\s+/).length : 0),
     [job],
