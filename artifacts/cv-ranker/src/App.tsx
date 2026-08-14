@@ -16,6 +16,10 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+GlobalWorkerOptions.workerSrc = pdfWorker;
 
 type Finding = { label: string; detail: string; evidence?: string };
 type Analysis = {
@@ -26,6 +30,30 @@ type Analysis = {
   gaps: Finding[];
   evidence: { quote: string; context: string }[];
 };
+
+const MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024;
+
+async function extractPdfText(file: File) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = getDocument({ data });
+  const pdf = await loadingTask.promise;
+
+  try {
+    const pages = await Promise.all(
+      Array.from({ length: pdf.numPages }, async (_, index) => {
+        const page = await pdf.getPage(index + 1);
+        const content = await page.getTextContent();
+        return content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ");
+      }),
+    );
+
+    return pages.join("\n\n").replace(/[ \t]+\n/g, "\n").trim();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
 
 function ScoreRing({ score }: { score: number }) {
   const radius = 46;
@@ -101,11 +129,13 @@ function Home() {
   const [cv, setCv] = useState("");
   const [fileName, setFileName] = useState("");
   const [fileError, setFileError] = useState("");
+  const [isExtracting, setIsExtracting] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [showMethod, setShowMethod] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const canAnalyze = job.trim().length > 30 && cv.trim().length > 30;
+  const canAnalyze =
+    !isExtracting && job.trim().length > 30 && cv.trim().length > 30;
   const jobCount = useMemo(
     () => (job.trim() ? job.trim().split(/\s+/).length : 0),
     [job],
@@ -115,7 +145,7 @@ function Home() {
     [cv],
   );
 
-  const handleFile = (file?: File) => {
+  const handleFile = async (file?: File) => {
     if (!file) return;
     if (
       file.type !== "application/pdf" &&
@@ -125,9 +155,37 @@ function Home() {
       setFileName("");
       return;
     }
+
+    if (file.size > MAX_PDF_SIZE_BYTES) {
+      setFileError("Please choose a PDF smaller than 10 MB.");
+      setFileName("");
+      return;
+    }
+
     setFileError("");
     setFileName(file.name);
-    setCv("");
+    setIsExtracting(true);
+    setStatus("idle");
+
+    try {
+      const extractedText = await extractPdfText(file);
+
+      if (extractedText.length < 30) {
+        setCv("");
+        setFileName("");
+        setFileError("We could not find enough readable text in that PDF.");
+        return;
+      }
+
+      setCv(extractedText);
+    } catch (error) {
+      console.error("PDF extraction failed", error);
+      setCv("");
+      setFileName("");
+      setFileError("We could not read that PDF. Please paste the CV text instead.");
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   // CHANGED: Now calls your real Gemini backend
@@ -245,7 +303,10 @@ function Home() {
                 </div>
                 <textarea
                   value={job}
-                  onChange={(event) => setJob(event.target.value)}
+                  onChange={(event) => {
+                    setJob(event.target.value);
+                    setStatus("idle");
+                  }}
                   data-testid="input-job-description"
                   placeholder="Paste the job description here…"
                   className="min-h-[260px] flex-1 resize-none bg-transparent text-sm leading-7 outline-none placeholder:text-muted-foreground/55"
@@ -270,6 +331,7 @@ function Home() {
                   onChange={(event) => {
                     setCv(event.target.value);
                     setFileName("");
+                    setStatus("idle");
                   }}
                   data-testid="input-cv-text"
                   placeholder="Paste the candidate's CV text here…"
@@ -279,7 +341,7 @@ function Home() {
                   ref={fileInput}
                   type="file"
                   accept=".pdf,application/pdf"
-                  onChange={(event) => handleFile(event.target.files?.[0])}
+                  onChange={(event) => void handleFile(event.target.files?.[0])}
                   className="hidden"
                   data-testid="input-cv-file"
                 />
@@ -299,13 +361,22 @@ function Home() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setFileName("")}
+                      onClick={() => {
+                        setFileName("");
+                        if (fileInput.current) fileInput.current.value = "";
+                      }}
                       data-testid="button-remove-file"
                       className="rounded p-1 hover:bg-background"
                     >
                       <X size={13} />
                     </button>
                   </div>
+                )}
+                {isExtracting && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="h-3 w-3 animate-pulse rounded-full border-2 border-primary/30 border-t-primary" />
+                    Reading PDF text…
+                  </p>
                 )}
                 {fileError && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
@@ -358,11 +429,16 @@ function Home() {
               </div>
               <button
                 onClick={runAnalysis}
-                disabled={status === "loading"}
+                disabled={!canAnalyze || status === "loading"}
                 data-testid="button-run-analysis"
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-[0_5px_0_hsl(162_35%_25%)] transition hover:-translate-y-0.5 hover:shadow-[0_7px_0_hsl(162_35%_25%)] active:translate-y-0 active:shadow-[0_3px_0_hsl(162_35%_25%)] disabled:cursor-wait disabled:opacity-70 sm:w-auto"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-[0_5px_0_hsl(162_35%_25%)] transition hover:-translate-y-0.5 hover:shadow-[0_7px_0_hsl(162_35%_25%)] active:translate-y-0 active:shadow-[0_3px_0_hsl(162_35%_25%)] disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
               >
-                {status === "loading" ? (
+                {isExtracting ? (
+                  <>
+                    <span className="h-4 w-4 animate-pulse rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground" />
+                    Reading PDF…
+                  </>
+                ) : status === "loading" ? (
                   <>
                     <span className="h-4 w-4 animate-pulse rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground" />{" "}
                     Reading both inputs…
