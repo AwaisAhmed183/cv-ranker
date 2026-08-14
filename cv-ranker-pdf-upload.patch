@@ -1,0 +1,372 @@
+[1mdiff --git a/artifacts/cv-ranker/package.json b/artifacts/cv-ranker/package.json[m
+[1mindex 94d2600..c0315e3 100644[m
+[1m--- a/artifacts/cv-ranker/package.json[m
+[1m+++ b/artifacts/cv-ranker/package.json[m
+[36m@@ -73,5 +73,8 @@[m
+     "vite": "catalog:",[m
+     "wouter": "^3.3.5",[m
+     "zod": "catalog:"[m
+[32m+[m[32m  },[m
+[32m+[m[32m  "dependencies": {[m
+[32m+[m[32m    "pdfjs-dist": "^6.2.108"[m
+   }[m
+ }[m
+[1mdiff --git a/artifacts/cv-ranker/src/App.tsx b/artifacts/cv-ranker/src/App.tsx[m
+[1mindex 42478b2..78e0603 100644[m
+[1m--- a/artifacts/cv-ranker/src/App.tsx[m
+[1m+++ b/artifacts/cv-ranker/src/App.tsx[m
+[36m@@ -16,6 +16,10 @@[m [mimport {[m
+   SlidersHorizontal,[m
+ } from "lucide-react";[m
+ import { ErrorBoundary } from "@/components/error-boundary";[m
+[32m+[m[32mimport { getDocument, GlobalWorkerOptions } from "pdfjs-dist";[m
+[32m+[m[32mimport pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";[m
+[32m+[m
+[32m+[m[32mGlobalWorkerOptions.workerSrc = pdfWorker;[m
+ [m
+ type Finding = { label: string; detail: string; evidence?: string };[m
+ type Analysis = {[m
+[36m@@ -27,6 +31,30 @@[m [mtype Analysis = {[m
+   evidence: { quote: string; context: string }[];[m
+ };[m
+ [m
+[32m+[m[32mconst MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024;[m
+[32m+[m
+[32m+[m[32masync function extractPdfText(file: File) {[m
+[32m+[m[32m  const data = new Uint8Array(await file.arrayBuffer());[m
+[32m+[m[32m  const loadingTask = getDocument({ data });[m
+[32m+[m[32m  const pdf = await loadingTask.promise;[m
+[32m+[m
+[32m+[m[32m  try {[m
+[32m+[m[32m    const pages = await Promise.all([m
+[32m+[m[32m      Array.from({ length: pdf.numPages }, async (_, index) => {[m
+[32m+[m[32m        const page = await pdf.getPage(index + 1);[m
+[32m+[m[32m        const content = await page.getTextContent();[m
+[32m+[m[32m        return content.items[m
+[32m+[m[32m          .map((item) => ("str" in item ? item.str : ""))[m
+[32m+[m[32m          .join(" ");[m
+[32m+[m[32m      }),[m
+[32m+[m[32m    );[m
+[32m+[m
+[32m+[m[32m    return pages.join("\n\n").replace(/[ \t]+\n/g, "\n").trim();[m
+[32m+[m[32m  } finally {[m
+[32m+[m[32m    await loadingTask.destroy();[m
+[32m+[m[32m  }[m
+[32m+[m[32m}[m
+[32m+[m
+ function ScoreRing({ score }: { score: number }) {[m
+   const radius = 46;[m
+   const circumference = 2 * Math.PI * radius;[m
+[36m@@ -101,11 +129,13 @@[m [mfunction Home() {[m
+   const [cv, setCv] = useState("");[m
+   const [fileName, setFileName] = useState("");[m
+   const [fileError, setFileError] = useState("");[m
+[32m+[m[32m  const [isExtracting, setIsExtracting] = useState(false);[m
+   const [result, setResult] = useState<Analysis | null>(null);[m
+   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");[m
+   const [showMethod, setShowMethod] = useState(false);[m
+   const fileInput = useRef<HTMLInputElement>(null);[m
+[31m-  const canAnalyze = job.trim().length > 30 && cv.trim().length > 30;[m
+[32m+[m[32m  const canAnalyze =[m
+[32m+[m[32m    !isExtracting && job.trim().length > 30 && cv.trim().length > 30;[m
+   const jobCount = useMemo([m
+     () => (job.trim() ? job.trim().split(/\s+/).length : 0),[m
+     [job],[m
+[36m@@ -115,8 +145,9 @@[m [mfunction Home() {[m
+     [cv],[m
+   );[m
+ [m
+[31m-  const handleFile = (file?: File) => {[m
+[32m+[m[32m  const handleFile = async (file?: File) => {[m
+     if (!file) return;[m
+[32m+[m
+     if ([m
+       file.type !== "application/pdf" &&[m
+       !file.name.toLowerCase().endsWith(".pdf")[m
+[36m@@ -125,9 +156,37 @@[m [mfunction Home() {[m
+       setFileName("");[m
+       return;[m
+     }[m
+[32m+[m
+[32m+[m[32m    if (file.size > MAX_PDF_SIZE_BYTES) {[m
+[32m+[m[32m      setFileError("Please choose a PDF smaller than 10 MB.");[m
+[32m+[m[32m      setFileName("");[m
+[32m+[m[32m      return;[m
+[32m+[m[32m    }[m
+[32m+[m
+     setFileError("");[m
+     setFileName(file.name);[m
+[31m-    setCv("");[m
+[32m+[m[32m    setIsExtracting(true);[m
+[32m+[m[32m    setStatus("idle");[m
+[32m+[m
+[32m+[m[32m    try {[m
+[32m+[m[32m      const extractedText = await extractPdfText(file);[m
+[32m+[m
+[32m+[m[32m      if (extractedText.length < 30) {[m
+[32m+[m[32m        setCv("");[m
+[32m+[m[32m        setFileName("");[m
+[32m+[m[32m        setFileError("We could not find enough readable text in that PDF.");[m
+[32m+[m[32m        return;[m
+[32m+[m[32m      }[m
+[32m+[m
+[32m+[m[32m      setCv(extractedText);[m
+[32m+[m[32m    } catch (error) {[m
+[32m+[m[32m      console.error("PDF extraction failed", error);[m
+[32m+[m[32m      setCv("");[m
+[32m+[m[32m      setFileName("");[m
+[32m+[m[32m      setFileError("We could not read that PDF. Please paste the CV text instead.");[m
+[32m+[m[32m    } finally {[m
+[32m+[m[32m      setIsExtracting(false);[m
+[32m+[m[32m    }[m
+   };[m
+ [m
+   // CHANGED: Now calls your real Gemini backend[m
+[36m@@ -245,7 +304,10 @@[m [mfunction Home() {[m
+                 </div>[m
+                 <textarea[m
+                   value={job}[m
+[31m-                  onChange={(event) => setJob(event.target.value)}[m
+[32m+[m[32m                  onChange={(event) => {[m
+[32m+[m[32m                    setJob(event.target.value);[m
+[32m+[m[32m                    setStatus("idle");[m
+[32m+[m[32m                  }}[m
+                   data-testid="input-job-description"[m
+                   placeholder="Paste the job description here…"[m
+                   className="min-h-[260px] flex-1 resize-none bg-transparent text-sm leading-7 outline-none placeholder:text-muted-foreground/55"[m
+[36m@@ -270,6 +332,7 @@[m [mfunction Home() {[m
+                   onChange={(event) => {[m
+                     setCv(event.target.value);[m
+                     setFileName("");[m
+[32m+[m[32m                    setStatus("idle");[m
+                   }}[m
+                   data-testid="input-cv-text"[m
+                   placeholder="Paste the candidate's CV text here…"[m
+[36m@@ -279,7 +342,7 @@[m [mfunction Home() {[m
+                   ref={fileInput}[m
+                   type="file"[m
+                   accept=".pdf,application/pdf"[m
+[31m-                  onChange={(event) => handleFile(event.target.files?.[0])}[m
+[32m+[m[32m                  onChange={(event) => void handleFile(event.target.files?.[0])}[m
+                   className="hidden"[m
+                   data-testid="input-cv-file"[m
+                 />[m
+[36m@@ -299,7 +362,10 @@[m [mfunction Home() {[m
+                     </span>[m
+                     <button[m
+                       type="button"[m
+[31m-                      onClick={() => setFileName("")}[m
+[32m+[m[32m                      onClick={() => {[m
+[32m+[m[32m                        setFileName("");[m
+[32m+[m[32m                        if (fileInput.current) fileInput.current.value = "";[m
+[32m+[m[32m                      }}[m
+                       data-testid="button-remove-file"[m
+                       className="rounded p-1 hover:bg-background"[m
+                     >[m
+[36m@@ -307,6 +373,12 @@[m [mfunction Home() {[m
+                     </button>[m
+                   </div>[m
+                 )}[m
+[32m+[m[32m                {isExtracting && ([m
+[32m+[m[32m                  <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">[m
+[32m+[m[32m                    <span className="h-3 w-3 animate-pulse rounded-full border-2 border-primary/30 border-t-primary" />[m
+[32m+[m[32m                    Reading PDF text…[m
+[32m+[m[32m                  </p>[m
+[32m+[m[32m                )}[m
+                 {fileError && ([m
+                   <p className="mt-2 flex items-center gap-1.5 text-xs text-destructive">[m
+                     <AlertCircle size={13} />[m
+[36m@@ -358,11 +430,16 @@[m [mfunction Home() {[m
+               </div>[m
+               <button[m
+                 onClick={runAnalysis}[m
+[31m-                disabled={status === "loading"}[m
+[32m+[m[32m                disabled={!canAnalyze || status === "loading"}[m
+                 data-testid="button-run-analysis"[m
+[31m-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-[0_5px_0_hsl(162_35%_25%)] transition hover:-translate-y-0.5 hover:shadow-[0_7px_0_hsl(162_35%_25%)] active:translate-y-0 active:shadow-[0_3px_0_hsl(162_35%_25%)] disabled:cursor-wait disabled:opacity-70 sm:w-auto"[m
+[32m+[m[32m                className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-[0_5px_0_hsl(162_35%_25%)] transition hover:-translate-y-0.5 hover:shadow-[0_7px_0_hsl(162_35%_25%)] active:translate-y-0 active:shadow-[0_3px_0_hsl(162_35%_25%)] disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"[m
+               >[m
+[31m-                {status === "loading" ? ([m
+[32m+[m[32m                {isExtracting ? ([m
+[32m+[m[32m                  <>[m
+[32m+[m[32m                    <span className="h-4 w-4 animate-pulse rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground" />[m
+[32m+[m[32m                    Reading PDF…[m
+[32m+[m[32m                  </>[m
+[32m+[m[32m                ) : status === "loading" ? ([m
+                   <>[m
+                     <span className="h-4 w-4 animate-pulse rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground" />{" "}[m
+                     Reading both inputs…[m
+[1mdiff --git a/pnpm-lock.yaml b/pnpm-lock.yaml[m
+[1mindex 5ac79f2..9f80dec 100644[m
+[1m--- a/pnpm-lock.yaml[m
+[1m+++ b/pnpm-lock.yaml[m
+[36m@@ -224,6 +224,10 @@[m [mimporters:[m
+         version: 3.1.0[m
+ [m
+   artifacts/cv-ranker:[m
+[32m+[m[32m    dependencies:[m
+[32m+[m[32m      pdfjs-dist:[m
+[32m+[m[32m        specifier: ^6.2.108[m
+[32m+[m[32m        version: 6.2.108[m
+     devDependencies:[m
+       '@hookform/resolvers':[m
+         specifier: ^3.10.0[m
+[36m@@ -799,6 +803,81 @@[m [mpackages:[m
+   '@jridgewell/trace-mapping@0.3.31':[m
+     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}[m
+ [m
+[32m+[m[32m  '@napi-rs/canvas-android-arm64@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-ZzDlpKQocwFfCwhMh17UWre6Qt5yZN3kNIJoUpGfRZqwDDZ164IKOsPOHsRd3d8Tuj5KM6bDjGuPmZxuPuG3NQ==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm64][m
+[32m+[m[32m    os: [android][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-darwin-arm64@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-Hr8v6CA/TBe+OJOePdV3sXWxzQHQKfQsTKPbc8wG7iPqVeAx6MMdzKGXlYID6SVvpfwV/zqkvGcdImYWSlhrZg==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm64][m
+[32m+[m[32m    os: [darwin][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-darwin-x64@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-9BXlLHBXpYnK4jSae1MdFdyPq09Xi1I3PeCNpvRzqgmUUBhgJS7aC1z7SZEP8JUXDHtbfIrolCS3sFuT9IGP2A==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [x64][m
+[32m+[m[32m    os: [darwin][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-zEW4fgvtYsOJ/N56Us4TQPfaFrUf0shGr9CgGSj3GACc+NHfUM3ci0YF9xFTjwJWGDmaEhYPL6KqCfFCxwm/qg==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm][m
+[32m+[m[32m    os: [linux][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm64-gnu@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-HFprwLspelJxCEtZvdMcz95Mwvfs63GzFVedLFmC/wslHnaOXhjXxgYxPCM/VdM4Jhx3CV4Lk0vVmh6hJv2etQ==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm64][m
+[32m+[m[32m    os: [linux][m
+[32m+[m[32m    libc: [glibc][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm64-musl@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-FNMGFAx8DvtDwlLfWyBJ+oQjgPXoIAqCnNTJYqtJCFRwwzK3AyAe5B1Ll3NZ6hcOzqw7HylZsq4nQxVyPCQX1Q==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm64][m
+[32m+[m[32m    os: [linux][m
+[32m+[m[32m    libc: [musl][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-riscv64-gnu@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-2vd5v8Lui+37Hh/spITKIvTT384ip4dnUc5XBn0E+sMNS4b7au7IswyT5YDG2udPTjSh/eLUs3sGuB5YHooFOA==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [riscv64][m
+[32m+[m[32m    os: [linux][m
+[32m+[m[32m    libc: [glibc][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-x64-gnu@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-iQIPy+Uey0expZTOszLri5n8rY7x4WUpMaY82mcXNIgbil30iHvc01OsiizhZC1KQHTK90RFMFWSpwFU+ON3aA==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [x64][m
+[32m+[m[32m    os: [linux][m
+[32m+[m[32m    libc: [glibc][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-x64-musl@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-Npthji25t7FUqIAKsoEkFS0qY5CYVkHjvI3tuZjDTG92wX8g4dst+Lfb4hhubdqPazlDcIwalPzInsFCtf3FFg==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [x64][m
+[32m+[m[32m    os: [linux][m
+[32m+[m[32m    libc: [musl][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-win32-arm64-msvc@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-bi+JsdCdbfVJDoAQybTYmkLKwh1xpYpptg5j/BNr2BB56u4/R26jrVvtjqff+CxYMXV6Kz1/jeDVhZCuj6bDng==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [arm64][m
+[32m+[m[32m    os: [win32][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-win32-x64-msvc@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-KQQwG9/sBmcGxqaLFIQf+k2OefREGoyEaIBmRuTM8bUuFKOEE9Xk5pel90hE6pmBwk/vo4RB0OdX+FxobJGMFw==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m[32m    cpu: [x64][m
+[32m+[m[32m    os: [win32][m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas@1.0.5':[m
+[32m+[m[32m    resolution: {integrity: sha512-GaPlicMtnvgPr5SowFRprkEJicDSrV3qCq17U4jiF5u0kNORZo3IbdN2Bk4SfcZJAMYFHbMVJ81O3w21CYxazg==}[m
+[32m+[m[32m    engines: {node: '>= 10'}[m
+[32m+[m
+   '@nodelib/fs.scandir@2.1.5':[m
+     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}[m
+     engines: {node: '>= 8'}[m
+[36m@@ -2531,6 +2610,10 @@[m [mpackages:[m
+   pathe@2.0.3:[m
+     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}[m
+ [m
+[32m+[m[32m  pdfjs-dist@6.2.108:[m
+[32m+[m[32m    resolution: {integrity: sha512-YxFb+SQcodN2rnX9Tn3dHYlqfb7NjlzzfONPpJd+AKoKtUjEdevTfbC07d5TcczzOK6261auRkP/M8OBHs9vFQ==}[m
+[32m+[m[32m    engines: {node: '>=22.13.0 || >=24'}[m
+[32m+[m
+   pg-cloudflare@1.4.0:[m
+     resolution: {integrity: sha512-Vo7z/6rrQYxpNRylp4Tlob2elzbh+N/MOQbxFVWCxS7oEx6jF53GTJFxK2WWpKuBRkmiin4Mt+xofFDjx09R0A==}[m
+ [m
+[36m@@ -3281,6 +3364,54 @@[m [msnapshots:[m
+       '@jridgewell/resolve-uri': 3.1.2[m
+       '@jridgewell/sourcemap-codec': 1.5.5[m
+ [m
+[32m+[m[32m  '@napi-rs/canvas-android-arm64@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-darwin-arm64@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-darwin-x64@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm64-gnu@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-arm64-musl@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-riscv64-gnu@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-x64-gnu@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-linux-x64-musl@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-win32-arm64-msvc@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas-win32-x64-msvc@1.0.5':[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+[32m+[m[32m  '@napi-rs/canvas@1.0.5':[m
+[32m+[m[32m    optionalDependencies:[m
+[32m+[m[32m      '@napi-rs/canvas-android-arm64': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-darwin-arm64': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-darwin-x64': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-arm-gnueabihf': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-arm64-gnu': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-arm64-musl': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-riscv64-gnu': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-x64-gnu': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-linux-x64-musl': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-win32-arm64-msvc': 1.0.5[m
+[32m+[m[32m      '@napi-rs/canvas-win32-x64-msvc': 1.0.5[m
+[32m+[m[32m    optional: true[m
+[32m+[m
+   '@nodelib/fs.scandir@2.1.5':[m
+     dependencies:[m
+       '@nodelib/fs.stat': 2.0.5[m
+[36m@@ -5027,6 +5158,10 @@[m [msnapshots:[m
+ [m
+   pathe@2.0.3: {}[m
+ [m
+[32m+[m[32m  pdfjs-dist@6.2.108:[m
+[32m+[m[32m    optionalDependencies:[m
+[32m+[m[32m      '@napi-rs/canvas': 1.0.5[m
+[32m+[m
+   pg-cloudflare@1.4.0:[m
+     optional: true[m
+ [m
