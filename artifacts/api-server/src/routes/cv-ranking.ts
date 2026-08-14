@@ -33,53 +33,26 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
           type: "OBJECT",
           properties: {
             score: { type: "INTEGER" },
-            verdict: { type: "STRING" },
+            matchedSkills: {
+              type: "ARRAY",
+              items: { type: "STRING" },
+            },
+            missingSkills: {
+              type: "ARRAY",
+              items: { type: "STRING" },
+            },
             summary: { type: "STRING" },
-            matched: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  label: { type: "STRING" },
-                  detail: { type: "STRING" },
-                  evidence: { type: "STRING" },
-                },
-                required: ["label", "detail", "evidence"],
-              },
-            },
-            gaps: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  label: { type: "STRING" },
-                  detail: { type: "STRING" },
-                },
-                required: ["label", "detail"],
-              },
-            },
-            evidence: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  quote: { type: "STRING" },
-                  context: { type: "STRING" },
-                },
-                required: ["quote", "context"],
-              },
-            },
           },
-          required: ["score", "verdict", "summary", "matched", "gaps", "evidence"],
+          required: ["score", "matchedSkills", "missingSkills", "summary"],
         },
       },
     });
 
     const prompt = `
-      You are an expert hiring analyst. Evaluate the candidate against the job description using a weighted rubric:
-      - 40% role fit: alignment with required skills, tools, responsibilities, and domain context.
-      - 40% experience and impact: seniority, direct experience, scope, outcomes, and quality of evidence.
-      - 20% clarity and credibility: how clearly the CV supports claims and how compelling the presentation is.
+      You are an expert hiring analyst. Evaluate the CV against the job description using this exact weighted rubric:
+      - 40% Technical Skills: match the required technical skills, tools, frameworks, systems, and qualifications in the job description.
+      - 40% Experience / Role Match: assess relevant work history, seniority, level of responsibility, project scope, and direct alignment to the role.
+      - 20% Domain Relevance: assess industry context, business domain familiarity, and how relevant the candidate's background is to the employer's sector or environment.
 
       --- JOB DESCRIPTION ---
       ${jobDescription}
@@ -87,10 +60,12 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
       --- CV / RESUME ---
       ${cvText}
 
-      Return ONLY a valid JSON object that matches the required schema. Do not add markdown, comments, or code fences.
-      Score the candidate from 0 to 100.
-      Give a brief verdict title, a concise summary, a matched array with label/detail/evidence, a gaps array with label/detail, and an evidence array with direct quotes from the CV and the surrounding context.
-      Extract the evidence quotes directly from the CV text and keep every string concise and factual.
+      Return ONLY a valid JSON object that matches the required schema. Do not add markdown, code fences, comments, or explanations.
+      Generate a score from 0 to 100 based on the weighted rubric above.
+      Output only these keys: "score", "matchedSkills", "missingSkills", and "summary".
+      - "matchedSkills": array of skill names or short phrases that are clearly present in the CV and relevant to the job.
+      - "missingSkills": array of important skill gaps or missing qualifications from the job description that are not sufficiently evidenced in the CV.
+      - "summary": concise but informative evaluation of candidate fit.
     `;
 
     // Call Gemini
