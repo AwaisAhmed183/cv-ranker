@@ -21,11 +21,14 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
+type Finding = { label: string; detail: string; evidence?: string };
 type Analysis = {
   score: number;
-  matchedSkills: string[];
-  missingSkills: string[];
+  verdict: string;
   summary: string;
+  matched: Finding[];
+  gaps: Finding[];
+  evidence: { quote: string; context: string }[];
 };
 
 const MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024;
@@ -129,11 +132,10 @@ function Home() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [errorMessage, setErrorMessage] = useState("");
   const [showMethod, setShowMethod] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const canAnalyze =
-    !isExtracting && job.trim().length > 5 && cv.trim().length > 5;
+    !isExtracting && job.trim().length > 10 && cv.trim().length > 10;
   const jobCount = useMemo(
     () => (job.trim() ? job.trim().split(/\s+/).length : 0),
     [job],
@@ -189,7 +191,6 @@ function Home() {
   // CHANGED: Now calls your real Gemini backend
   const runAnalysis = async () => {
     if (!canAnalyze) {
-      setErrorMessage("Enter a role brief and CV text of at least 6 characters each to begin.");
       setStatus("error");
       return;
     }
@@ -202,27 +203,14 @@ function Home() {
       });
 
       if (!response.ok) {
-        let message = "The analysis service returned an error.";
-        try {
-          const payload = await response.json();
-          if (typeof payload.error === "string") message = payload.error;
-        } catch {
-          // Keep the generic message when the server response is not JSON.
-        }
-        throw new Error(message);
+        throw new Error("Failed to fetch analysis");
       }
 
-      const data = (await response.json()) as Analysis;
-      setResult(data);
-      setErrorMessage("");
+      const data = await response.json();
+      setResult(data); // Gemini returns the exact Analysis object we need
       setStatus("idle");
     } catch (error) {
       console.error("Analysis error:", error);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not complete the analysis. Please try again.",
-      );
       setStatus("error");
     }
   };
@@ -234,7 +222,6 @@ function Home() {
     setFileError("");
     setResult(null);
     setStatus("idle");
-    setErrorMessage("");
   };
 
   return (
@@ -319,7 +306,6 @@ function Home() {
                   onChange={(event) => {
                     setJob(event.target.value);
                     setStatus("idle");
-                    setErrorMessage("");
                   }}
                   data-testid="input-job-description"
                   placeholder="Paste the job description here…"
@@ -346,7 +332,6 @@ function Home() {
                     setCv(event.target.value);
                     setFileName("");
                     setStatus("idle");
-                    setErrorMessage("");
                   }}
                   data-testid="input-cv-text"
                   placeholder="Paste the candidate's CV text here…"
@@ -470,7 +455,8 @@ function Home() {
                 className="animate-rise-in mt-3 text-right text-xs font-semibold text-destructive"
                 data-testid="status-form-error"
               >
-                {errorMessage}
+                Add a role brief and CV text (at least a few sentences each) to
+                begin.
               </p>
             )}
           </section>
@@ -521,7 +507,7 @@ function Results({
               <div className="font-mono text-[10px] uppercase tracking-[.17em] text-sidebar-primary">
                 Overall signal
               </div>
-              <h2 className="mt-2 font-serif text-3xl">Candidate fit</h2>
+              <h2 className="mt-2 font-serif text-3xl">{result.verdict}</h2>
               <p className="mt-3 max-w-md text-sm leading-6 text-sidebar-foreground/65">
                 A directional comparison based only on the text you supplied.
                 Use it to guide the next human conversation.
@@ -531,7 +517,7 @@ function Results({
           <div className="mt-8 border-t border-sidebar-border pt-5">
             <div className="flex justify-between text-xs text-sidebar-foreground/60">
               <span>Overlap detected</span>
-              <span className="font-mono">{result.matchedSkills.length} signals</span>
+              <span className="font-mono">{result.matched.length} signals</span>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-sidebar-accent">
               <div
@@ -569,21 +555,26 @@ function Results({
               Matched requirements
             </h2>
             <span className="font-mono text-xs text-muted-foreground">
-              {result.matchedSkills.length}
+              {result.matched.length}
             </span>
           </div>
-          {result.matchedSkills.length ? (
+          {result.matched.length ? (
             <div className="space-y-4">
-              {result.matchedSkills.map((skill, index) => (
+              {result.matched.map((item, index) => (
                 <div
-                  key={`${skill}-${index}`}
+                  key={item.label}
                   className={`animate-rise-in delay-${Math.min(index + 1, 4)} border-l-2 border-primary/50 pl-3`}
                   data-testid={`finding-matched-${index}`}
                 >
-                  <div className="text-sm font-bold">{skill}</div>
+                  <div className="text-sm font-bold">{item.label}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
-                    Explicitly matched to the role requirements.
+                    {item.detail}
                   </div>
+                  {item.evidence && (
+                    <div className="mt-2 text-xs italic leading-5 text-foreground/70">
+                      “{item.evidence}”
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -600,20 +591,20 @@ function Results({
               Open questions
             </h2>
             <span className="font-mono text-xs text-muted-foreground">
-              {result.missingSkills.length}
+              {result.gaps.length}
             </span>
           </div>
-          {result.missingSkills.length ? (
+          {result.gaps.length ? (
             <div className="space-y-4">
-              {result.missingSkills.map((skill, index) => (
+              {result.gaps.map((item, index) => (
                 <div
-                  key={`${skill}-${index}`}
+                  key={item.label}
                   className={`animate-rise-in delay-${Math.min(index + 1, 4)} border-l-2 border-accent/70 pl-3`}
                   data-testid={`finding-gap-${index}`}
                 >
-                  <div className="text-sm font-bold">{skill}</div>
+                  <div className="text-sm font-bold">{item.label}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
-                    Not sufficiently evidenced in the supplied CV.
+                    {item.detail}. Ask before assuming.
                   </div>
                 </div>
               ))}
@@ -626,18 +617,35 @@ function Results({
       <div className="mt-5 rounded-2xl border border-border bg-card p-6 sm:p-8">
         <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
           <div>
-            <h2 className="font-serif text-2xl">Decision notes</h2>
+            <h2 className="font-serif text-2xl">Evidence trail</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              This score uses the strict technical-skill, experience/role, and domain-relevance rubric.
+              The phrases below are copied from the candidate text you supplied.
             </p>
           </div>
           <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[.14em] text-primary">
             <ShieldCheck size={13} /> Grounded in input
           </span>
         </div>
-        <div className="mt-6 rounded-xl bg-secondary/55 p-4 text-sm leading-6 text-muted-foreground">
-          The model returned only the structured score, matched skills, missing skills, and summary so the result stays concise and reviewable.
-        </div>
+        {result.evidence.length ? (
+          <div className="mt-6 grid gap-3 md:grid-cols-3">
+            {result.evidence.map((item, index) => (
+              <div
+                key={`${item.quote}-${index}`}
+                className="rounded-xl bg-secondary/55 p-4"
+                data-testid={`evidence-snippet-${index}`}
+              >
+                <div className="font-serif text-lg leading-snug">
+                  “{item.quote}”
+                </div>
+                <div className="mt-3 text-[11px] font-semibold uppercase tracking-[.1em] text-primary">
+                  {item.context}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyFinding text="Add more detail to the CV to create an evidence trail." />
+        )}
       </div>
       <p className="mt-6 flex items-center gap-2 text-xs leading-5 text-muted-foreground">
         <ShieldCheck size={14} className="shrink-0 text-primary" /> CV Ranker is

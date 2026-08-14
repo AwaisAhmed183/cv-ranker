@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const router = Router();
 
@@ -30,18 +30,18 @@ router.post("/cv-ranking", async (req: Request, res: Response) => {
         temperature: 0.2,
         responseMimeType: "application/json",
         responseSchema: {
-          type: SchemaType.OBJECT,
+          type: "OBJECT",
           properties: {
-            score: { type: SchemaType.INTEGER },
+            score: { type: "INTEGER" },
             matchedSkills: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING },
+              type: "ARRAY",
+              items: { type: "STRING" },
             },
             missingSkills: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING },
+              type: "ARRAY",
+              items: { type: "STRING" },
             },
-            summary: { type: SchemaType.STRING },
+            summary: { type: "STRING" },
           },
           required: ["score", "matchedSkills", "missingSkills", "summary"],
         },
